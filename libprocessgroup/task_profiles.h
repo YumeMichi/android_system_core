@@ -113,8 +113,32 @@ class SetAttributeAction : public ProfileAction {
     std::string value_;
 };
 
+// Abstract profile element for cached fd
+class CachedFdProfileAction : public ProfileAction {
+  public:
+    virtual void EnableResourceCaching();
+    virtual void DropResourceCaching();
+
+  protected:
+    enum FdState {
+        FDS_INACCESSIBLE = -1,
+        FDS_APP_DEPENDENT = -2,
+        FDS_NOT_CACHED = -3,
+    };
+
+    android::base::unique_fd fd_;
+    mutable std::mutex fd_mutex_;
+
+    static bool IsAppDependentPath(const std::string& path);
+
+    void InitFd(const std::string& path);
+    bool IsFdValid() const { return fd_ > FDS_INACCESSIBLE; }
+
+    virtual const std::string GetPath() const = 0;
+};
+
 // Set cgroup profile element
-class SetCgroupAction : public ProfileAction {
+class SetCgroupAction : public CachedFdProfileAction {
   public:
     SetCgroupAction(const CgroupController& c, const std::string& p);
 
@@ -125,35 +149,33 @@ class SetCgroupAction : public ProfileAction {
 
     const CgroupController* controller() const { return &controller_; }
 
+  protected:
+    const std::string GetPath() const override { return controller_.GetTasksFilePath(path_); }
+
   private:
     CgroupController controller_;
     std::string path_;
-    android::base::unique_fd fd_[ProfileAction::RCT_COUNT];
-    mutable std::mutex fd_mutex_;
 
     static bool AddTidToCgroup(int tid, int fd, const char* controller_name);
-    CacheUseResult UseCachedFd(ResourceCacheType cache_type, int id) const;
 };
 
 // Write to file action
-class WriteFileAction : public ProfileAction {
+class WriteFileAction : public CachedFdProfileAction {
   public:
     WriteFileAction(const std::string& path, const std::string& value, bool logfailures);
 
     virtual bool ExecuteForProcess(uid_t uid, pid_t pid) const;
     virtual bool ExecuteForTask(int tid) const;
-    virtual void EnableResourceCaching(ResourceCacheType cache_type);
-    virtual void DropResourceCaching(ResourceCacheType cache_type);
+
+  protected:
+    const std::string GetPath() const override { return path_; }
 
   private:
     std::string path_, value_;
     bool logfailures_;
-    android::base::unique_fd fd_;
-    mutable std::mutex fd_mutex_;
 
     static bool WriteValueToFile(const std::string& value, const std::string& path,
                                  bool logfailures);
-    CacheUseResult UseCachedFd(ResourceCacheType cache_type, const std::string& value) const;
 };
 
 class TaskProfile {
